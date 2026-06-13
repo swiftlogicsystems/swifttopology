@@ -4,3 +4,22 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# The core bridge to libbpf
+libbpf-rs = "0.24"
+# For hardware topology discovery
+hwloc2 = "2.5.0"
+# TUI Framework
+ratatui = { version = "0.26", features = ["crossterm"] }
+crossterm = "0.27"
+# Error handling and async
+anyhow = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+libc = "0.2"
+
+[build-dependencies]
+# This compiles swifttopology.bpf.c into a Rust module
+libbpf-cargo = "0.24"
+
+[package.metadata.libbpf]
+prog_dir = "src/bpf"
+target_dir = "target/bpf"
