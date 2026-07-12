@@ -1,10 +1,22 @@
 mod collector;
 mod topology;
+mod ui;
 
+use crate::collector::{SysfsCollector, TelemetryCollector};
+use crate::ui::app::App;
 use anyhow::Result;
-use collector::{SysfsCollector, TelemetryCollector};
-use std::path::Path;
-use topology::SystemTopology;
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use libc::tolower;
+use ratatui::{backend::CrosstermBackend, Terminal};
+use std::{
+    io,
+    path::Path,
+    time::{Duration, Instant},
+};
 
 fn is_root() -> bool {
     unsafe { libc::geteuid() == 0 }
@@ -16,26 +28,57 @@ fn has_btf_support() -> bool {
 
 fn select_collector() -> Box<dyn TelemetryCollector> {
     if is_root() && has_btf_support() {
-        //Placeholder for Phase 2
-        println!("[SYSTEM] Elevated privileges detected(eBPF Engine implementation pending)");
         Box::new(SysfsCollector::new())
     } else {
-        println!("[SYSTEM] No elevated privileges detected, falling back to sysfs collector");
         Box::new(SysfsCollector::new())
     }
 }
 
 fn main() -> Result<()> {
-    // 1. Resolve Hardware
-    println!("[INFO] Resolving System Topology...");
-    let topo = SystemTopology::resolve()?;
-    println!("[INFO] Detected {} Logical Cores", topo.cores.len());
-
-    // 2. Initialize Telemetry
+    // Initial System Discovery
+    let topo = topology::SystemTopology::resolve()?;
     let mut collector = select_collector();
 
-    // 3. Start TUI (Placeholder for Ratatui Loop)
-    println!("[INFO] Booting TUI...");
+    // 2. Initialize App state
+    let mut app = App::new(topo);
 
+    // 3. Start TUI (Placeholder for Ratatui Loop)
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    // main Event loop
+    let tick_rate = Duration::from_millis(200);
+    let mut last_tick = Instant::now();
+
+    while !app.should_quit {
+        // Update data via collector
+        app.update_metrics(collector.update_metrics());
+
+        // Draw UI
+        terminal.draw(|f| ui::render(f, &app))?;
+
+        //Handle Input
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+        if event::poll(timeout)? {
+            if let Event::Key(key) = event::read()? {
+                match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => app.quit(),
+                    _ => {}
+                }
+            }
+        }
+        if last_tick.elapsed() >= tick_rate {
+            last_tick = Instant::now();
+        }
+    }
+    // 5. Cleanup
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }

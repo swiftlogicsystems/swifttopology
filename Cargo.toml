@@ -14,6 +14,7 @@ crossterm = "0.27"
 anyhow = "1.0"
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
+hostname = "0.3"
 # We will add libbpf-rs in Phase 2
 
 [build-dependencies]

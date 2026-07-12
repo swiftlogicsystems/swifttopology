@@ -1,7 +1,6 @@
 use std::collections::hash_set::Difference;
 use std::collections::HashMap;
 use std::fs;
-use std::intrinsics::unaligned_volatile_load;
 use std::path::Path;
 use std::time::Instant;
 
