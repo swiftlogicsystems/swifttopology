@@ -22,7 +22,6 @@ pub fn render(f: &mut Frame, app: &App) {
         ])
         .split(f.size());
 
-    // Header: Dynamic Hostname
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "localhost".into());
@@ -83,7 +82,6 @@ fn draw_bottom_bar(f: &mut Frame, area: Rect) {
 }
 
 fn draw_topology_map(f: &mut Frame, area: Rect, app: &App) {
-    // 1. Group by Sockets
     let mut package_ids: Vec<u32> = app.topo.cores.iter().map(|c| c.package_id).collect();
     package_ids.sort();
     package_ids.dedup();
@@ -105,7 +103,12 @@ fn draw_topology_map(f: &mut Frame, area: Rect, app: &App) {
         let inner_socket = socket_block.inner(socket_chunks[i]);
         f.render_widget(socket_block, socket_chunks[i]);
 
-        // 2. Nesting: Find L3 Caches for this Socket
+        let pkg_cores: Vec<_> = app
+            .topo
+            .cores
+            .iter()
+            .filter(|c| c.package_id == pkg_id)
+            .collect();
         let l3_caches: Vec<_> = app
             .topo
             .cache_blocks
@@ -113,54 +116,69 @@ fn draw_topology_map(f: &mut Frame, area: Rect, app: &App) {
             .filter(|c| c.level == 3)
             .collect();
 
-        let l3_chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints(
-                l3_caches
-                    .iter()
-                    .map(|_| Constraint::Min(5))
-                    .collect::<Vec<_>>(),
-            )
-            .split(inner_socket);
-
-        for (j, cache) in l3_caches.iter().enumerate() {
-            let cache_block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(BorderType::Double)
-                .title(format!(" L3 Cache ({}) ", cache.size))
-                .border_style(Style::default().fg(Color::DarkGray));
-
-            let inner_cache = cache_block.inner(l3_chunks[j]);
-            f.render_widget(cache_block, l3_chunks[j]);
-
-            // 3. Draw Cores that share THIS L3 Cache
-            // (We parse the shared_cpus string, e.g., "0-3")
-            let shared_ids = parse_cpu_list(&cache.shared_cpus);
-            let cores_in_cache: Vec<_> = app
-                .topo
-                .cores
-                .iter()
-                .filter(|c| shared_ids.contains(&c.logical_id))
-                .collect();
-
-            let core_rows = (cores_in_cache.len() as f32 / 2.0).ceil() as u16;
-            let core_layout = Layout::default()
+        if l3_caches.is_empty() {
+            draw_core_grid(f, inner_socket, &pkg_cores, app);
+        } else {
+            let l3_chunks = Layout::default()
                 .direction(Direction::Vertical)
-                .constraints(vec![Constraint::Length(3); core_rows as usize])
-                .split(inner_cache);
+                .constraints(
+                    l3_caches
+                        .iter()
+                        .map(|_| Constraint::Percentage(100 / l3_caches.len() as u16))
+                        .collect::<Vec<_>>(),
+                )
+                .split(inner_socket);
 
-            for (r, row_rect) in core_layout.iter().enumerate() {
-                let col_layout = Layout::default()
-                    .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                    .split(*row_rect);
+            for (j, cache) in l3_caches.iter().enumerate() {
+                let shared_ids = parse_cpu_list(&cache.shared_cpus);
+                let cores_in_cache: Vec<_> = pkg_cores
+                    .iter()
+                    .filter(|c| shared_ids.contains(&c.logical_id))
+                    .cloned()
+                    .collect();
 
-                for (c, col_rect) in col_layout.iter().enumerate() {
-                    let idx = r * 2 + c;
-                    if idx < cores_in_cache.len() {
-                        draw_core(f, *col_rect, cores_in_cache[idx].logical_id, app);
-                    }
-                }
+                let cache_block = Block::default()
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Double)
+                    .title(format!(
+                        " L3 Cache ({}) | Cores: {} ",
+                        cache.size,
+                        cores_in_cache.len()
+                    ))
+                    .border_style(Style::default().fg(Color::DarkGray));
+
+                let inner_cache = cache_block.inner(l3_chunks[j]);
+                f.render_widget(cache_block, l3_chunks[j]);
+
+                draw_core_grid(f, inner_cache, &cores_in_cache, app);
+            }
+        }
+    }
+}
+
+fn draw_core_grid(f: &mut Frame, area: Rect, cores: &[&crate::topology::CpuCore], app: &App) {
+    if cores.is_empty() {
+        return;
+    }
+
+    let cols = 2;
+    let rows = (cores.len() as f32 / cols as f32).ceil() as u16;
+
+    let row_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Percentage(100 / rows); rows as usize])
+        .split(area);
+
+    for (r, row_rect) in row_layout.iter().enumerate() {
+        let col_layout = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(*row_rect);
+
+        for (c, col_rect) in col_layout.iter().enumerate() {
+            let idx = r * cols as usize + c;
+            if idx < cores.len() {
+                draw_core(f, *col_rect, cores[idx].logical_id, app);
             }
         }
     }
@@ -170,11 +188,26 @@ fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     let metric = app.metrics.get(&cpu_id);
     let usage = metric.map(|m| m.exec_pct).unwrap_or(0.0);
 
+    // Find L1 and L2 cache sizes for this specific CPU
+    let l1_size = app
+        .topo
+        .cache_blocks
+        .iter()
+        .find(|c| c.level == 1 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
+        .map(|c| c.size.clone())
+        .unwrap_or_else(|| "??".into());
+
+    let l2_size = app
+        .topo
+        .cache_blocks
+        .iter()
+        .find(|c| c.level == 2 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
+        .map(|c| c.size.clone())
+        .unwrap_or_else(|| "??".into());
+
     let color = match metric.map(|m| m.classification).unwrap_or_default() {
         WorkloadClassification::Idle => COLOR_IDLE,
         WorkloadClassification::ComputeBound => COLOR_COMPUTE,
-        WorkloadClassification::MemoryBound => COLOR_MEMORY,
-        WorkloadClassification::ContentionBound => COLOR_CONTENTION,
         _ => COLOR_IDLE,
     };
 
@@ -182,9 +215,9 @@ fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
         .borders(Borders::ALL)
         .padding(Padding::horizontal(1))
         .border_style(Style::default().fg(color))
-        .title(format!(" CPU {} ", cpu_id));
+        // Title now shows the L1/L2 info for this core
+        .title(format!(" CPU {} [L1:{} L2:{}] ", cpu_id, l1_size, l2_size));
 
-    // Gauge calculation
     let width = area.width.saturating_sub(12) as usize;
     let filled = ((usage / 100.0) * width as f64) as usize;
     let bar = format!(
@@ -202,15 +235,18 @@ fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     );
 }
 
-// Simple helper to parse strings like "0-3" or "0,2,4"
 fn parse_cpu_list(list: &str) -> Vec<u32> {
     let mut cpus = Vec::new();
-    for part in list.split(',') {
+    // Clean string of any spaces
+    let clean_list = list.replace(' ', "");
+    for part in clean_list.split(',') {
         if part.contains('-') {
             let range: Vec<&str> = part.split('-').collect();
-            if let (Ok(start), Ok(end)) = (range[0].parse::<u32>(), range[1].parse::<u32>()) {
-                for i in start..=end {
-                    cpus.push(i);
+            if range.len() == 2 {
+                if let (Ok(start), Ok(end)) = (range[0].parse::<u32>(), range[1].parse::<u32>()) {
+                    for i in start..=end {
+                        cpus.push(i);
+                    }
                 }
             }
         } else if let Ok(id) = part.parse::<u32>() {

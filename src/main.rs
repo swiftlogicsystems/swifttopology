@@ -37,6 +37,18 @@ fn select_collector() -> Box<dyn TelemetryCollector> {
 fn main() -> Result<()> {
     // Initial System Discovery
     let topo = topology::SystemTopology::resolve()?;
+    // DEBUG PRINT
+    println!("[INFO] Detected {} Logical Cores", topo.cores.len());
+    println!("[INFO] Detected {} Cache Blocks", topo.cache_blocks.len());
+    for cb in &topo.cache_blocks {
+        println!(
+            "  -> L{} Cache: Size={}, CPUs={}",
+            cb.level, cb.size, cb.shared_cpus
+        );
+    }
+
+    // Give you 2 seconds to read the output before TUI starts
+    std::thread::sleep(std::time::Duration::from_secs(2));
     let mut collector = select_collector();
 
     // 2. Initialize App state
