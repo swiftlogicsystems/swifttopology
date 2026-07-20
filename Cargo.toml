@@ -21,3 +21,7 @@ libbpf-rs = { version = "0.24", features = ["vendored"] }
 
 [build-dependencies]
 libbpf-cargo = "0.24"
+
+[patch.crates-io]
+# This ensures that even the underlying sys crate uses vendoring
+libbpf-sys = { git = "https://github.com/libbpf/libbpf-sys.git", features = ["vendored-libbpf", "vendored-libelf", "vendored-zlib"] }

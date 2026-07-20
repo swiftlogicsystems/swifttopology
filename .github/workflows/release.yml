@@ -23,16 +23,16 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Static Binary
-        # We use RUSTFLAGS to tell the compiler to bundle everything (crt-static)
-        # We use the standard gnu target because it's more stable for eBPF C-compilation
-        run: |
-          export RUSTFLAGS="-C target-feature=+crt-static"
-          cargo build --release
+        # We set the flag ONLY for the specific x86_64 target.
+        # This prevents the proc-macro/clap error.
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C target-feature=+crt-static"
+        run: cargo build --release
 
       - name: Prepare Binary for Release
         run: |
           cp target/release/swift-topomap ./swift-topomap
-          # Verify it's truly static (should say 'not a dynamic executable')
+          # Double check it is static. If 'ldd' says 'not a dynamic executable', we won!
           ldd ./swift-topomap || echo "Static Verification Passed"
 
       - name: Upload Release Assets
