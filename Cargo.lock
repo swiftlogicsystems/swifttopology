@@ -778,7 +778,6 @@ dependencies = [
  "hostname",
  "libbpf-cargo",
  "libbpf-rs",
- "libbpf-sys",
  "libc",
  "plain",
  "ratatui",
