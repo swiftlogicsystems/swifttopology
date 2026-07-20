@@ -32,8 +32,11 @@ jobs:
 
       - name: Build Static Binary
         # We set CC=clang to ensure eBPF compatibility during compilation
+        # We define CFLAGS to map 64-bit LFS (Large File Support) functions to their standard musl counterparts,
+        # which are 64-bit by default, resolving missing lseek64/off64_t symbols.
         run: |
           export CC=clang
+          export CFLAGS="-Dlseek64=lseek -Doff64_t=off_t -Dftello64=ftello -Dfseeko64=fseeko"
           cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Upload Release Assets
