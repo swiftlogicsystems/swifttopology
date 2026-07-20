@@ -11,37 +11,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install build deps
+      - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools linux-libc-dev autopoint gettext libtool autoconf automake pkg-config make
+          sudo apt-get install -y clang llvm libelf-dev pkg-config
 
-          # CRITICAL FIX: Link the kernel headers so musl-gcc can find them
-          # musl-gcc bypasses standard /usr/include to avoid glibc conflicts, so we must link into x86_64-linux-musl
-          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/x86_64-linux-musl/asm
-          sudo ln -s /usr/include/asm-generic /usr/include/x86_64-linux-musl/asm-generic
-          sudo ln -s /usr/include/linux /usr/include/x86_64-linux-musl/linux
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
 
-          # Also link to /usr/include in case other parts of the build chain search there
-          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm || true
-          sudo ln -s /usr/include/asm-generic /usr/include/asm-generic || true
-          sudo ln -s /usr/include/linux /usr/include/linux || true
-
-      - name: Install Rust musl target
-        run: rustup target add x86_64-unknown-linux-musl
-
-      - name: Build Static Binary
-        # We set CC=musl-gcc to ensure target C dependencies compile against musl headers
-        # We define CFLAGS to map 64-bit LFS (Large File Support) functions to their standard musl counterparts,
-        # which are 64-bit by default, resolving missing lseek64/open64/off64_t symbols.
+      - name: Install Zig and cargo-zigbuild
         run: |
-          export CC=musl-gcc
-          export CFLAGS="-Dlseek64=lseek -Doff64_t=off_t -Dftello64=ftello -Dfseeko64=fseeko -Dopen64=open -Dstat64=stat -Dfstat64=fstat -Dlstat64=lstat"
-          cargo build --release --target x86_64-unknown-linux-musl
+          sudo snap install zig --classic --edge
+          cargo install cargo-zigbuild
+
+      - name: Build Static Binary with Zig
+        # zigbuild handles the musl headers and LFS (lseek64) issues automatically
+        run: cargo zigbuild --release --target x86_64-unknown-linux-musl
+
+      - name: Rename Binary
+        run: cp target/x86_64-unknown-linux-musl/release/swift-topomap ./swift-topomap
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
         with:
-          files: target/x86_64-unknown-linux-musl/release/swift-topomap
+          files: swift-topomap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
