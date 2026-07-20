@@ -14,14 +14,27 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools
+          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools linux-libc-dev
+
+          # CRITICAL FIX: Link the kernel headers so musl-gcc can find them
+          # musl-gcc bypasses standard /usr/include to avoid glibc conflicts, so we must link into x86_64-linux-musl
+          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/x86_64-linux-musl/asm
+          sudo ln -s /usr/include/asm-generic /usr/include/x86_64-linux-musl/asm-generic
+          sudo ln -s /usr/include/linux /usr/include/x86_64-linux-musl/linux
+
+          # Also link to /usr/include in case other parts of the build chain search there
+          sudo ln -s /usr/include/x86_64-linux-gnu/asm /usr/include/asm || true
+          sudo ln -s /usr/include/asm-generic /usr/include/asm-generic || true
+          sudo ln -s /usr/include/linux /usr/include/linux || true
 
       - name: Install Rust musl target
         run: rustup target add x86_64-unknown-linux-musl
 
       - name: Build Static Binary
-        # We use musl for a truly zero-dependency static binary
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        # We set CC=clang to ensure eBPF compatibility during compilation
+        run: |
+          export CC=clang
+          cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
