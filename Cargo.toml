@@ -17,6 +17,7 @@ serde = { version = "1.0", features = ["derive"] }
 hostname = "0.3"
 plain = "0.2"
 libbpf-rs = "0.24"
+libbpf-sys = { version = "1.7.0", features = ["vendored-libelf", "vendored-zlib"] }
 
 [build-dependencies]
 libbpf-cargo = "0.24"

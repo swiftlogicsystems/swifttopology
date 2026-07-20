@@ -14,7 +14,7 @@ jobs:
       - name: Install build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools linux-libc-dev
+          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools linux-libc-dev autopoint gettext libtool autoconf automake pkg-config make
 
           # CRITICAL FIX: Link the kernel headers so musl-gcc can find them
           # musl-gcc bypasses standard /usr/include to avoid glibc conflicts, so we must link into x86_64-linux-musl
