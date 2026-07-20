@@ -21,16 +21,17 @@ jobs:
         with:
           targets: x86_64-unknown-linux-musl
 
-      - name: Install Zig and cargo-zigbuild
+      - name: Install cargo-zigbuild
         run: |
-          sudo snap install zig --classic --edge
+          # We use pip to install ziglang as it is faster/more reliable in CI than snap
+          pip install ziglang
           cargo install cargo-zigbuild
 
-      - name: Build Static Binary with Zig
-        # zigbuild handles the musl headers and LFS (lseek64) issues automatically
+      - name: Build Static Binary
+        # zigbuild + vendored feature solves the header and lseek64 issues
         run: cargo zigbuild --release --target x86_64-unknown-linux-musl
 
-      - name: Rename Binary
+      - name: Prepare Binary for Release
         run: cp target/x86_64-unknown-linux-musl/release/swift-topomap ./swift-topomap
 
       - name: Upload Release Assets
