@@ -9,6 +9,7 @@ struct cpu_stats {
     u64 cycles;
     u64 l3_misses;
     u32 current_pid;
+    u32 padding;
 };
 
 // A Per-CPU array is the most efficient way to store core-local data

@@ -49,6 +49,7 @@ pub struct EbpfCollector {
     // This now correctly holds a 'static skeleton
     skel: SwifttopologySkel<'static>,
     _perf_fds: Vec<i32>, // Keep the FDs open to keep the PMU counters active
+    last_raw: HashMap<u32, (u64, u64, u64)>,
 }
 
 impl EbpfCollector {
@@ -116,16 +117,42 @@ impl TelemetryCollector for EbpfCollector {
                 stats_map.lookup_percpu(&key, libbpf_rs::MapFlags::ANY)
             {
                 if let Some(raw_stats) = per_cpu_values.get(cpu_id as usize) {
-                    if raw_stats.len() >= 20 {
-                        let pid_bytes: [u8; 4] = raw_stats[16..20].try_into().unwrap_or([0; 4]);
-                        let pid = u32::from_ne_bytes(pid_bytes);
+                    if raw_stats.len() >= 32 {
+                        let inst = u64::from_ne_bytes(raw[0..8].try_into().unwrap());
+                        let cycl = u64::from_ne_bytes(raw[8..16].try_into().unwrap());
+                        let miss = u64::from_ne_bytes(raw[16..24].try_into().unwrap());
+                        let pid  = u32::from_ne_bytes(raw[24..28].try_into().unwrap());
+
+                        let mut ipc =0.0;
+                        let mut classification = WorkloadClassification::Idle;
+
+                        if let Some(&(p_inst, p_cycle, p_miss)) = self.last_raw.get(&cpu_id) {
+                            let d_inst = inst.saturating_sub(p_inst) as f64;
+                            let d_cycle = cycl.saturating_sub(p_cycle) as f64;
+
+                            if d_cycle > 1000 {
+                                ipc = d_inst / d_cycle;
+                                classification = if ipc > 1.0 {
+                                WorkloadClassification::ComputeBound
+                                } else if ipc < 0.4 && d_cycl > 100000.0 {
+                                    WorkloadClassification::MemoryBound
+                                } else {
+                                    WorkloadClassification::ComputeBound
+                                };
+                            }
+
+                        }
+                        self.last_raw.insert(cpu_id, (inst, cycl, miss));
 
                         metrics.insert(
                             cpu_id,
                             CoreMetrics {
                                 cpu_id,
+                                exec_pct: 0.0,
+                                ipc: Some(ipc),
+                                llc_miss_rate: Some(miss as f64),
                                 current_pid: if pid > 0 { Some(pid) } else { None },
-                                classification: WorkloadClassification::ComputeBound,
+                                classification: classification,
                                 ..Default::default()
                             },
                         );
