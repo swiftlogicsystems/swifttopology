@@ -1,0 +1,31 @@
+name: Release Static Binary
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libelf-dev libbpf-dev musl-tools
+
+      - name: Install Rust musl target
+        run: rustup target add x86_64-unknown-linux-musl
+
+      - name: Build Static Binary
+        # We use musl for a truly zero-dependency static binary
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v1
+        with:
+          files: target/x86_64-unknown-linux-musl/release/swift-topomap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

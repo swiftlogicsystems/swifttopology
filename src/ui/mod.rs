@@ -56,9 +56,9 @@ fn draw_bottom_bar(f: &mut Frame, area: Rect) {
         Span::styled(" ■ ", Style::default().fg(COLOR_COMPUTE)),
         Span::raw("Compute "),
         Span::styled(" ■ ", Style::default().fg(COLOR_MEMORY)),
-        Span::raw("Mem-Stall "),
+        Span::raw("Mem-Stall "), // Amber!
         Span::styled(" ■ ", Style::default().fg(COLOR_CONTENTION)),
-        Span::raw("Contention"),
+        Span::raw("Contention"), // Crimson!
     ]);
 
     f.render_widget(
@@ -186,42 +186,39 @@ fn draw_core_grid(f: &mut Frame, area: Rect, cores: &[&crate::topology::CpuCore]
 
 fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     let metric = app.metrics.get(&cpu_id);
+
     let usage = metric.map(|m| m.exec_pct).unwrap_or(0.0);
+    let ipc = metric.and_then(|m| m.ipc).unwrap_or(0.0);
+    let pid = metric.and_then(|m| m.current_pid);
 
-    // Find L1 and L2 cache sizes for this specific CPU
-    let l1_size = app
-        .topo
-        .cache_blocks
-        .iter()
-        .find(|c| c.level == 1 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
-        .map(|c| c.size.clone())
-        .unwrap_or_else(|| "??".into());
-
-    let l2_size = app
-        .topo
-        .cache_blocks
-        .iter()
-        .find(|c| c.level == 2 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
-        .map(|c| c.size.clone())
-        .unwrap_or_else(|| "??".into());
-
+    // Map ALL classifications to their brand colors
     let color = match metric.map(|m| m.classification).unwrap_or_default() {
         WorkloadClassification::Idle => COLOR_IDLE,
         WorkloadClassification::ComputeBound => COLOR_COMPUTE,
-        _ => COLOR_IDLE,
+        WorkloadClassification::MemoryBound => COLOR_MEMORY, // Now Amber
+        WorkloadClassification::ContentionBound => COLOR_CONTENTION, // Now Crimson
+    };
+
+    let (pid_label, ipc_label) = if usage > 0.5 {
+        let p_str = match pid {
+            Some(p) => format!("PID:{}", p),
+            None => "IDLE".to_string(),
+        };
+        (p_str, format!("IPC:{:.2}", ipc))
+    } else {
+        ("IDLE".to_string(), "        ".to_string()) // Hide technicals when idle
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
         .padding(Padding::horizontal(1))
         .border_style(Style::default().fg(color))
-        // Title now shows the L1/L2 info for this core
-        .title(format!(" CPU {} [L1:{} L2:{}] ", cpu_id, l1_size, l2_size));
+        .title(format!(" CPU {} | {} | {} ", cpu_id, pid_label, ipc_label));
 
-    let width = area.width.saturating_sub(12) as usize;
+    let width = area.width.saturating_sub(15) as usize;
     let filled = ((usage / 100.0) * width as f64) as usize;
     let bar = format!(
-        "{:.1}% [{}{}]",
+        "{:>5.1}% [{}{}]",
         usage,
         "█".repeat(filled),
         " ".repeat(width.saturating_sub(filled))

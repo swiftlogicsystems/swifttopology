@@ -2,7 +2,7 @@ mod collector;
 mod topology;
 mod ui;
 
-use crate::collector::{SysfsCollector, TelemetryCollector};
+use crate::collector::{EbpfCollector, SysfsCollector, TelemetryCollector};
 use crate::ui::app::App;
 use anyhow::Result;
 use crossterm::{
@@ -10,7 +10,6 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use libc::tolower;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{
     io,
@@ -26,9 +25,12 @@ fn has_btf_support() -> bool {
     Path::new("/sys/kernel/btf/vmlinux").exists()
 }
 
-fn select_collector() -> Box<dyn TelemetryCollector> {
+fn select_collector(num_cpus: u32) -> Box<dyn TelemetryCollector> {
     if is_root() && has_btf_support() {
-        Box::new(SysfsCollector::new())
+        match EbpfCollector::init(num_cpus) {
+            Ok(collector) => Box::new(collector),
+            Err(_) => Box::new(SysfsCollector::new()),
+        }
     } else {
         Box::new(SysfsCollector::new())
     }
@@ -37,19 +39,8 @@ fn select_collector() -> Box<dyn TelemetryCollector> {
 fn main() -> Result<()> {
     // Initial System Discovery
     let topo = topology::SystemTopology::resolve()?;
-    // DEBUG PRINT
-    println!("[INFO] Detected {} Logical Cores", topo.cores.len());
-    println!("[INFO] Detected {} Cache Blocks", topo.cache_blocks.len());
-    for cb in &topo.cache_blocks {
-        println!(
-            "  -> L{} Cache: Size={}, CPUs={}",
-            cb.level, cb.size, cb.shared_cpus
-        );
-    }
-
-    // Give you 2 seconds to read the output before TUI starts
-    std::thread::sleep(std::time::Duration::from_secs(2));
-    let mut collector = select_collector();
+    let num_cpus = topo.cores.len() as u32;
+    let mut collector = select_collector(num_cpus);
 
     // 2. Initialize App state
     let mut app = App::new(topo);
