@@ -48,10 +48,11 @@ pub trait TelemetryCollector {
 pub struct EbpfCollector {
     // This now correctly holds a 'static skeleton
     skel: SwifttopologySkel<'static>,
+    _perf_fds: Vec<i32>, // Keep the FDs open to keep the PMU counters active
 }
 
 impl EbpfCollector {
-    pub fn init() -> Result<Self> {
+    pub fn init(num_cpus: u32) -> Result<Self> {
         let builder = SwifttopologySkelBuilder::default();
 
         // FIX: We allocate the OpenObject on the heap and "leak" it.
@@ -63,11 +64,43 @@ impl EbpfCollector {
             .open(open_obj)
             .context("Failed to open BPF skeleton")?;
         let mut skel = open_skel.load().context("Failed to load BPF skeleton")?;
+        let mut perf_fds = Vec::new();
 
-        skel.attach().context("Failed to attach BPF probes")?;
-
-        Ok(Self { skel })
+        // Bind the PMU counters to the perf event array
+        for cpu in 0..num_cpus{
+            // Index 0: Instructions
+            // Index 1: Cycles
+            // Index 2: L3 Misses
+            let configs = [
+                (libc::PERF_COUNT_HW_INSTRUCTIONS, &mut skel.maps.perf_instructions),
+                (libc::PERF_COUNT_HW_CYCLES, &mut skel.maps.perf_cycles),
+                (libc::PERF_COUNT_HW_L3_MISSES, &mut skel.maps.perf_l3_misses),
+            ];
+            for (config, map) in configs {
+            let fd = open_perf_counter(cpu as i32, config as u64)?;
+            map.update(&cpu.to_ne_bytes(), &(fd as i32).to_ne_bytes(), libbpf_rs::MapFlags::ANY)?;
+            perf_fds.push(fd);
+            }
+        }
+        skel.attach()?;
+        Ok(Self { skel, _perf_fds: perf_fds })
     }
+
+
+}
+
+//Helper Function top open Hardware Counters via libc
+fn open_perf_counter(cpu:i32, config: u64) -> Result<i32> {
+    let mut attr = unsafe {std::mem::zeroed::<libc::perf_event_attr>()};
+    attr.type_ = libc::PERF_TYPE_HARDWARE;
+    attr.config = config;
+    attr.size = std::mem::size_of::<libc::perf_event_attr>() as u32;
+    attr.set_disabled(0);
+    attr.set_pinned(1);
+
+    let fd = unsafe { libc::perf_event_open(&mut attr, -1, cpu, -1, 0) };
+    if fd < 0 { anyhow::bail!("perf_event_open failed"); }
+    Ok(fd)
 }
 
 impl TelemetryCollector for EbpfCollector {
