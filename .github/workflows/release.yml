@@ -14,22 +14,26 @@ jobs:
       - name: Install Build Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm libelf-dev zlib1g-dev build-essential pkg-config musl-tools linux-libc-dev
+          sudo apt-get install -y \
+            clang llvm libelf-dev zlib1g-dev \
+            build-essential pkg-config musl-tools \
+            linux-libc-dev \
+            autopoint gettext libtool autoconf automake make
 
       - name: Install Rust musl target
         run: rustup target add x86_64-unknown-linux-musl
 
       - name: Build Static Binary
-        # We set CPATH to tell the vendored C code where to find the 'asm/unistd.h'
-        # on the Ubuntu runner while building for musl.
+        # CPATH: Helps the musl compiler find kernel headers on a gnu-based runner
+        # CC: Forces clang to ensure eBPF code compiles correctly
         run: |
           export CPATH=/usr/include/x86_64-linux-gnu
+          export CC=clang
           cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Prepare Binary for Release
         run: |
           cp target/x86_64-unknown-linux-musl/release/swift-topomap ./swift-topomap
-          # Double check it is static
           file ./swift-topomap
           ldd ./swift-topomap || echo "Static Verification Passed"
 
