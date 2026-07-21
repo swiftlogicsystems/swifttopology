@@ -6,24 +6,15 @@ authors = ["Ankur Rathore <solutions@swiftlogic.systems>"]
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-# TUI Stack
 ratatui = { version = "0.26", features = ["crossterm"] }
 crossterm = "0.27"
-
-# System & Logic
 anyhow = "1.0"
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 hostname = "0.3"
 plain = "0.2"
-
-# 1. High-level BPF crate
+# Only this is needed; it will trigger the vendoring of libbpf/libelf/zlib automatically
 libbpf-rs = { version = "0.24", features = ["vendored"] }
-
-# 2. Force libbpf-sys to vendor EVERY dependency (libbpf, libelf, and zlib)
-# listing it here as a direct dependency ensures these features are enabled
-# during the +crt-static compilation in GitHub Actions.
-libbpf-sys = { version = "1.4.5", features = ["vendored-libbpf", "vendored-libelf", "vendored-zlib"] }
 
 [build-dependencies]
 libbpf-cargo = "0.24"

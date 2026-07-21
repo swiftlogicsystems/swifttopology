@@ -7,7 +7,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Use 22.04 to avoid the GLIBC 2.38 (__isoc23) symbol leakage
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
 
@@ -15,27 +16,30 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            clang llvm libelf-dev zlib1g-dev \
-            build-essential pkg-config musl-tools \
-            linux-libc-dev \
-            autopoint gettext libtool autoconf automake make
+            make pkg-config autopoint gettext \
+            binutils-dev libelf-dev zlib1g-dev
 
-      - name: Install Rust musl target
-        run: rustup target add x86_64-unknown-linux-musl
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install cargo-zigbuild
+        run: |
+          python3 -m pip install cargo-zigbuild
 
       - name: Build Static Binary
-        # CPATH: Helps the musl compiler find kernel headers on a gnu-based runner
-        # CC: Forces clang to ensure eBPF code compiles correctly
+        # zigbuild handles the mapping of lseek64 -> lseek and
+        # ensures the C code uses musl-compatible headers.
         run: |
-          export CPATH=/usr/include/x86_64-linux-gnu
-          export CC=clang
-          cargo build --release --target x86_64-unknown-linux-musl
+          cargo zigbuild --release --target x86_64-unknown-linux-musl
 
       - name: Prepare Binary for Release
         run: |
           cp target/x86_64-unknown-linux-musl/release/swift-topomap ./swift-topomap
+          # Verify the binary is truly static
           file ./swift-topomap
-          ldd ./swift-topomap || echo "Static Verification Passed"
+          ! ldd ./swift-topomap || echo "Static Verification Passed"
 
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v1
