@@ -14,7 +14,7 @@ serde = { version = "1.0", features = ["derive"] }
 hostname = "0.3"
 plain = "0.2"
 # Only this is needed; it will trigger the vendoring of libbpf/libelf/zlib automatically
-libbpf-rs = { version = "0.24", features = ["static"] }
+libbpf-rs = { version = "0.24", features = ["vendored"] }
 
 [build-dependencies]
 libbpf-cargo = "0.24"
