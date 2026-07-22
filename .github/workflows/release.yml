@@ -7,8 +7,7 @@ on:
 
 jobs:
   build:
-    # Use 20.04 for maximum compatibility with older glibc systems
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -23,9 +22,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Static Binary
-        # 'cargo rustc' applies the static flag ONLY to the final binary,
-        # avoiding the proc-macro/clap error.
-        # We also manually tell the linker to prefer static versions of elf and z.
+        # cargo rustc applies these flags ONLY to the final binary
+        # We manually link libelf and libz statically.
         run: |
           cargo rustc --release -- \
             -C target-feature=+crt-static \
@@ -37,7 +35,6 @@ jobs:
       - name: Prepare Binary for Release
         run: |
           cp target/release/swift-topomap ./swift-topomap
-          # Verify it's truly static
           file ./swift-topomap
           ldd ./swift-topomap || echo "Static Verification Passed"
 

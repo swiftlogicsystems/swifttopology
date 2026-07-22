@@ -26,7 +26,7 @@ pub fn render(f: &mut Frame, app: &App) {
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "localhost".into());
     let header_text = format!(
-        " swift-topomap v0.1 | Host: {} | {} Cores | 'q' to quit ",
+        " swift-topomap v0.1 | Host: {} | {} Cores | [h] help [q] quit ",
         hostname,
         app.topo.cores.len()
     );
@@ -42,6 +42,10 @@ pub fn render(f: &mut Frame, app: &App) {
 
     draw_topology_map(f, main_layout[1], app);
     draw_bottom_bar(f, main_layout[2]);
+    // Help Overlay
+    if app.show_help {
+        draw_help_overlay(f);
+    }
 }
 
 fn draw_bottom_bar(f: &mut Frame, area: Rect) {
@@ -251,4 +255,127 @@ fn parse_cpu_list(list: &str) -> Vec<u32> {
         }
     }
     cpus
+}
+
+fn draw_help_overlay(f: &mut Frame) {
+    let area = centered_rect(80, 75, f.size());
+
+    // SwiftLogic Orange: R:255, G:135, B:0
+    let swiftlogic_orange = Color::Rgb(255, 135, 0);
+
+    let block = Block::default()
+        .title(" swift-topomap | Technical Reference ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .padding(Padding::uniform(1));
+
+    f.render_widget(ratatui::widgets::Clear, area);
+
+    let help_text = vec![
+        Line::from(vec![Span::styled(
+            "CORE CONTROLS",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::raw("  h / ?   "),
+            Span::styled(
+                "Toggle this reference screen",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::raw("  q / Esc "),
+            Span::styled("Exit utility", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "OBSERVABILITY AT SPEED",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::raw("  Use "),
+            Span::styled("-i <ms>", Style::default().fg(Color::Yellow)),
+            Span::raw(" to adjust the sampling resolution."),
+        ]),
+        Line::from(vec![
+            Span::styled("  • High-Perf: ", Style::default().fg(Color::Green)),
+            Span::raw("-i 50 for ultra-fast microarchitectural monitoring."),
+        ]),
+        Line::from(vec![
+            Span::styled("  • Remote:    ", Style::default().fg(Color::Blue)),
+            Span::raw("-i 1000 for stable monitoring over slow SSH links."),
+        ]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "THE 'EXPERT' SWITCH",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::raw("  Use "),
+            Span::styled("--sysfs", Style::default().fg(Color::Yellow)),
+            Span::raw(" to bypass the eBPF engine."),
+        ]),
+        Line::from(vec![Span::raw(
+            "  Forces the standard Sysfs engine for debugging and kernel-compatibility",
+        )]),
+        Line::from(vec![Span::raw(
+            "  verification, even when running with root privileges.",
+        )]),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "MICROARCHITECTURAL CLASSIFICATION",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from(vec![
+            Span::styled("  ■ Green: ", Style::default().fg(COLOR_COMPUTE)),
+            Span::raw("Healthy Compute (High IPC)"),
+        ]),
+        Line::from(vec![
+            Span::styled("  ■ Amber: ", Style::default().fg(COLOR_MEMORY)),
+            Span::raw("Memory/Cache Stalled (Low IPC/Stalled)"),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::raw("Developed by "),
+            Span::styled("SwiftLogic Systems", Style::default().fg(swiftlogic_orange)),
+        ]),
+        Line::from(vec![Span::styled(
+            "www.swiftlogic.systems",
+            Style::default().fg(Color::DarkGray),
+        )]),
+    ];
+
+    f.render_widget(
+        Paragraph::new(help_text)
+            .block(block)
+            .alignment(Alignment::Left),
+        area,
+    );
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_y) / 2),
+                Constraint::Percentage(percent_y),
+                Constraint::Percentage((100 - percent_y) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Percentage((100 - percent_x) / 2),
+                Constraint::Percentage(percent_x),
+                Constraint::Percentage((100 - percent_x) / 2),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
 }

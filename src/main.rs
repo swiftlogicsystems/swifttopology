@@ -5,6 +5,7 @@ mod ui;
 use crate::collector::{EbpfCollector, SysfsCollector, TelemetryCollector};
 use crate::ui::app::App;
 use anyhow::Result;
+use clap::Parser;
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
@@ -36,11 +37,30 @@ fn select_collector(num_cpus: u32) -> Box<dyn TelemetryCollector> {
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Refresh interval in milliseconds
+    #[arg(short, long, default_value_t = 200)]
+    interval: u64,
+
+    /// Force Sysfs collector (ignore eBPF)
+    #[arg(short, long, default_value_t = false)]
+    sysfs: bool,
+}
+
 fn main() -> Result<()> {
+    let args = Args::parse();
     // Initial System Discovery
     let topo = topology::SystemTopology::resolve()?;
     let num_cpus = topo.cores.len() as u32;
-    let mut collector = select_collector(num_cpus);
+
+    // Logic: Use sysfs if forced, otherwise negotiate
+    let mut collector: Box<dyn TelemetryCollector> = if args.sysfs {
+        Box::new(SysfsCollector::new())
+    } else {
+        select_collector(num_cpus)
+    };
 
     // 2. Initialize App state
     let mut app = App::new(topo);
@@ -72,6 +92,7 @@ fn main() -> Result<()> {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => app.quit(),
+                    KeyCode::Char('h') | KeyCode::Char('?') => app.toggle_help(),
                     _ => {}
                 }
             }
