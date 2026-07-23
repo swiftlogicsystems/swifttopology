@@ -16,11 +16,18 @@ pub struct CacheBlock {
     pub type_name: String,
     pub shared_cpus: String,
 }
+#[derive(Debug, Clone)]
+pub struct NumaNode {
+    pub id: u32,
+    pub total_kb: u64,
+    pub free_kb: u64,
+}
 
 #[derive(Debug, Clone)]
 pub struct SystemTopology {
     pub cores: Vec<CpuCore>,
     pub cache_blocks: Vec<CacheBlock>,
+    pub numa_nodes: Vec<NumaNode>,
 }
 
 impl SystemTopology {
@@ -87,7 +94,6 @@ impl SystemTopology {
                                 .trim()
                                 .to_string();
 
-                            // Try 'shared_cpu_list' first, then 'shared_cpus' as fallback
                             let shared_cpus = fs::read_to_string(idx_path.join("shared_cpu_list"))
                                 .or_else(|_| fs::read_to_string(idx_path.join("shared_cpus")))
                                 .unwrap_or_default()
@@ -109,11 +115,49 @@ impl SystemTopology {
                 }
             }
         }
+        // Adding the Numa nodes parsing logic
+        let mut numa_nodes = Vec::new();
+        if let Ok(node_entries) = fs::read_dir("/sys/devices/system/node") {
+            for entry in node_entries.filter_map(|e| e.ok()) {
+                let name = entry.file_name().into_string().unwrap_or_default();
+                if name.starts_with("node") && name[4..].chars().all(|c| c.is_numeric()) {
+                    let id: u32 = name[4..].parse().unwrap_or(0);
+                    let meminfo_path = entry.path().join("meminfo");
+
+                    if let Ok(content) = fs::read_to_string(meminfo_path) {
+                        let mut total = 0;
+                        let mut free = 0;
+                        for line in content.lines() {
+                            if line.contains("MemTotal:") {
+                                total = line
+                                    .split_whitespace()
+                                    .nth(3)
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0);
+                            }
+                            if line.contains("MemFree:") {
+                                free = line
+                                    .split_whitespace()
+                                    .nth(3)
+                                    .and_then(|s| s.parse().ok())
+                                    .unwrap_or(0);
+                            }
+                            numa_nodes.push(NumaNode {
+                                id,
+                                total_kb: total,
+                                free_kb: free,
+                            });
+                        }
+                    }
+                }
+            }
+        }
 
         cores.sort_by_key(|c| c.logical_id);
         Ok(SystemTopology {
             cores,
             cache_blocks,
+            numa_nodes,
         })
     }
 }
