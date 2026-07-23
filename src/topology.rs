@@ -16,11 +16,12 @@ pub struct CacheBlock {
     pub type_name: String,
     pub shared_cpus: String,
 }
+
 #[derive(Debug, Clone)]
 pub struct NumaNode {
     pub id: u32,
     pub total_kb: u64,
-    pub free_kb: u64,
+    pub free_kb: u64, // This represents "Actual Available" (Free + Inactive + Reclaimable)
 }
 
 #[derive(Debug, Clone)]
@@ -34,6 +35,7 @@ impl SystemTopology {
     pub fn resolve() -> Result<Self> {
         let mut cores = Vec::new();
         let mut cache_blocks = Vec::new();
+        let mut numa_nodes = Vec::new();
         let mut seen_caches = HashSet::new();
 
         let cpu_root = "/sys/devices/system/cpu";
@@ -47,7 +49,6 @@ impl SystemTopology {
                 if !path.is_dir() {
                     continue;
                 }
-
                 let id: u32 = name[3..].parse().unwrap_or(0);
 
                 // 1. Resolve Core Topology
@@ -68,19 +69,20 @@ impl SystemTopology {
                 }
 
                 // 2. Resolve Cache Topology
-                let cache_dir = path.join("cache");
-                if cache_dir.is_dir() {
-                    if let Ok(indices) = fs::read_dir(cache_dir) {
+                let cache_root = path.join("cache");
+                if cache_root.is_dir() {
+                    if let Ok(indices) = fs::read_dir(cache_root) {
                         for idx_entry in indices.filter_map(|e| e.ok()) {
                             let idx_path = idx_entry.path();
                             if !idx_path.is_dir() {
                                 continue;
                             }
 
-                            // Try to read level, skip if fails
-                            let level_str =
-                                fs::read_to_string(idx_path.join("level")).unwrap_or_default();
-                            let level: u32 = level_str.trim().parse().unwrap_or(0);
+                            let level: u32 = fs::read_to_string(idx_path.join("level"))
+                                .unwrap_or_default()
+                                .trim()
+                                .parse()
+                                .unwrap_or(0);
                             if level == 0 {
                                 continue;
                             }
@@ -102,7 +104,7 @@ impl SystemTopology {
 
                             let cache_id = format!("{}-{}", level, shared_cpus);
                             if !seen_caches.contains(&cache_id) {
-                                seen_caches.insert(cache_id.clone());
+                                seen_caches.insert(cache_id);
                                 cache_blocks.push(CacheBlock {
                                     level,
                                     size,
@@ -115,40 +117,55 @@ impl SystemTopology {
                 }
             }
         }
-        // Adding the Numa nodes parsing logic
-        let mut numa_nodes = Vec::new();
-        if let Ok(node_entries) = fs::read_dir("/sys/devices/system/node") {
-            for entry in node_entries.filter_map(|e| e.ok()) {
+
+        // 3. Resolve NUMA Memory
+        if let Ok(node_dir) = fs::read_dir("/sys/devices/system/node") {
+            for entry in node_dir.filter_map(|e| e.ok()) {
                 let name = entry.file_name().into_string().unwrap_or_default();
                 if name.starts_with("node") && name[4..].chars().all(|c| c.is_numeric()) {
-                    let id: u32 = name[4..].parse().unwrap_or(0);
-                    let meminfo_path = entry.path().join("meminfo");
+                    let node_id: u32 = name[4..].parse().unwrap_or(0);
+                    let meminfo =
+                        fs::read_to_string(entry.path().join("meminfo")).unwrap_or_default();
 
-                    if let Ok(content) = fs::read_to_string(meminfo_path) {
-                        let mut total = 0;
-                        let mut free = 0;
-                        for line in content.lines() {
-                            if line.contains("MemTotal:") {
-                                total = line
-                                    .split_whitespace()
-                                    .nth(3)
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            if line.contains("MemFree:") {
-                                free = line
-                                    .split_whitespace()
-                                    .nth(3)
-                                    .and_then(|s| s.parse().ok())
-                                    .unwrap_or(0);
-                            }
-                            numa_nodes.push(NumaNode {
-                                id,
-                                total_kb: total,
-                                free_kb: free,
-                            });
+                    let mut total = 0;
+                    let mut free = 0;
+                    let mut inactive = 0;
+                    let mut kreclaimable = 0;
+                    let mut sreclaimable = 0;
+
+                    for line in meminfo.lines() {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        if parts.len() < 4 {
+                            continue;
+                        }
+                        let val = parts[3].parse::<u64>().unwrap_or(0);
+
+                        if line.contains("MemTotal:") {
+                            total = val;
+                        } else if line.contains("MemFree:") {
+                            free = val;
+                        } else if line.contains("Inactive:") {
+                            inactive = val;
+                        } else if line.contains("KReclaimable:") {
+                            kreclaimable = val;
+                        } else if line.contains("SReclaimable:") {
+                            sreclaimable = val;
                         }
                     }
+
+                    // Available = Free + Inactive (Page Cache) + Reclaimable Kernel Memory
+                    let reclaimable_kernel = if kreclaimable > 0 {
+                        kreclaimable
+                    } else {
+                        sreclaimable
+                    };
+                    let available = free + inactive + reclaimable_kernel;
+
+                    numa_nodes.push(NumaNode {
+                        id: node_id,
+                        total_kb: total,
+                        free_kb: available,
+                    });
                 }
             }
         }

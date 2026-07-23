@@ -4,13 +4,15 @@ use crate::collector::WorkloadClassification;
 use crate::ui::app::App;
 use ratatui::{
     prelude::*,
-    widgets::{Block, BorderType, Borders, Padding, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Padding, Paragraph},
 };
 
+// SwiftLogic Brand Colors
 const COLOR_IDLE: Color = Color::Rgb(49, 50, 68);
 const COLOR_COMPUTE: Color = Color::Rgb(166, 227, 161);
 const COLOR_MEMORY: Color = Color::Rgb(249, 226, 175);
 const COLOR_CONTENTION: Color = Color::Rgb(243, 139, 168);
+const SWIFTLOGIC_ORANGE: Color = Color::Rgb(255, 135, 0);
 
 pub fn render(f: &mut Frame, app: &App) {
     let main_layout = Layout::default()
@@ -22,6 +24,16 @@ pub fn render(f: &mut Frame, app: &App) {
         ])
         .split(f.size());
 
+    draw_header(f, main_layout[0], app);
+    draw_topology_map(f, main_layout[1], app);
+    draw_bottom_bar(f, main_layout[2]);
+
+    if app.show_help {
+        draw_help_popup(f);
+    }
+}
+
+fn draw_header(f: &mut Frame, area: Rect, app: &App) {
     let hostname = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "localhost".into());
@@ -38,14 +50,7 @@ pub fn render(f: &mut Frame, app: &App) {
                 .border_style(Style::default().fg(Color::Cyan)),
         )
         .alignment(Alignment::Center);
-    f.render_widget(header, main_layout[0]);
-
-    draw_topology_map(f, main_layout[1], app);
-    draw_bottom_bar(f, main_layout[2]);
-    // Help Overlay
-    if app.show_help {
-        draw_help_overlay(f);
-    }
+    f.render_widget(header, area);
 }
 
 fn draw_bottom_bar(f: &mut Frame, area: Rect) {
@@ -60,9 +65,9 @@ fn draw_bottom_bar(f: &mut Frame, area: Rect) {
         Span::styled(" ■ ", Style::default().fg(COLOR_COMPUTE)),
         Span::raw("Compute "),
         Span::styled(" ■ ", Style::default().fg(COLOR_MEMORY)),
-        Span::raw("Mem-Stall "), // Amber!
+        Span::raw("Mem-Stall "),
         Span::styled(" ■ ", Style::default().fg(COLOR_CONTENTION)),
-        Span::raw("Contention"), // Crimson!
+        Span::raw("Contention"),
     ]);
 
     f.render_widget(
@@ -104,9 +109,54 @@ fn draw_topology_map(f: &mut Frame, area: Rect, app: &App) {
         let socket_block = Block::default()
             .borders(Borders::ALL)
             .title(format!(" Socket #{} ", pkg_id));
-        let inner_socket = socket_block.inner(socket_chunks[i]);
+        let mut inner_socket = socket_block.inner(socket_chunks[i]);
         f.render_widget(socket_block, socket_chunks[i]);
 
+        // 1. Draw NUMA RAM Bar
+        if let Some(numa) = app.topo.numa_nodes.iter().find(|n| n.id == pkg_id) {
+            let used_kb = numa.total_kb.saturating_sub(numa.free_kb);
+            let usage_ratio = if numa.total_kb > 0 {
+                used_kb as f64 / numa.total_kb as f64
+            } else {
+                0.0
+            };
+            let mem_text = format!(
+                " RAM: {:.1} / {:.1} GB ({:.0}%) ",
+                used_kb as f64 / 1024.0 / 1024.0,
+                numa.total_kb as f64 / 1024.0 / 1024.0,
+                usage_ratio * 100.0
+            );
+
+            let bar_width = 10;
+            let filled = (usage_ratio * bar_width as f64) as usize;
+            let gauge = format!("[{}{}]", "█".repeat(filled), "░".repeat(bar_width - filled));
+
+            let mem_line = Line::from(vec![
+                Span::raw(mem_text),
+                Span::styled(
+                    gauge,
+                    Style::default().fg(if usage_ratio > 0.8 {
+                        Color::Red
+                    } else {
+                        Color::Cyan
+                    }),
+                ),
+            ]);
+
+            f.render_widget(
+                Paragraph::new(mem_line),
+                Rect {
+                    x: inner_socket.x + 2,
+                    y: inner_socket.y,
+                    width: inner_socket.width - 4,
+                    height: 1,
+                },
+            );
+            inner_socket.y += 1;
+            inner_socket.height = inner_socket.height.saturating_sub(1);
+        }
+
+        // 2. Draw Cores (with optional L3 Nesting)
         let pkg_cores: Vec<_> = app
             .topo
             .cores
@@ -140,20 +190,13 @@ fn draw_topology_map(f: &mut Frame, area: Rect, app: &App) {
                     .filter(|c| shared_ids.contains(&c.logical_id))
                     .cloned()
                     .collect();
-
                 let cache_block = Block::default()
                     .borders(Borders::ALL)
                     .border_type(BorderType::Double)
-                    .title(format!(
-                        " L3 Cache ({}) | Cores: {} ",
-                        cache.size,
-                        cores_in_cache.len()
-                    ))
+                    .title(format!(" L3 Cache ({}) ", cache.size))
                     .border_style(Style::default().fg(Color::DarkGray));
-
                 let inner_cache = cache_block.inner(l3_chunks[j]);
                 f.render_widget(cache_block, l3_chunks[j]);
-
                 draw_core_grid(f, inner_cache, &cores_in_cache, app);
             }
         }
@@ -164,10 +207,8 @@ fn draw_core_grid(f: &mut Frame, area: Rect, cores: &[&crate::topology::CpuCore]
     if cores.is_empty() {
         return;
     }
-
     let cols = 2;
     let rows = (cores.len() as f32 / cols as f32).ceil() as u16;
-
     let row_layout = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![Constraint::Percentage(100 / rows); rows as usize])
@@ -178,7 +219,6 @@ fn draw_core_grid(f: &mut Frame, area: Rect, cores: &[&crate::topology::CpuCore]
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
             .split(*row_rect);
-
         for (c, col_rect) in col_layout.iter().enumerate() {
             let idx = r * cols as usize + c;
             if idx < cores.len() {
@@ -190,27 +230,42 @@ fn draw_core_grid(f: &mut Frame, area: Rect, cores: &[&crate::topology::CpuCore]
 
 fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     let metric = app.metrics.get(&cpu_id);
-
     let usage = metric.map(|m| m.exec_pct).unwrap_or(0.0);
     let ipc = metric.and_then(|m| m.ipc).unwrap_or(0.0);
     let pid = metric.and_then(|m| m.current_pid);
 
-    // Map ALL classifications to their brand colors
+    let l1_size = app
+        .topo
+        .cache_blocks
+        .iter()
+        .find(|c| c.level == 1 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
+        .map(|c| c.size.clone())
+        .unwrap_or_else(|| "??".into());
+    let l2_size = app
+        .topo
+        .cache_blocks
+        .iter()
+        .find(|c| c.level == 2 && parse_cpu_list(&c.shared_cpus).contains(&cpu_id))
+        .map(|c| c.size.clone())
+        .unwrap_or_else(|| "??".into());
+
     let color = match metric.map(|m| m.classification).unwrap_or_default() {
         WorkloadClassification::Idle => COLOR_IDLE,
         WorkloadClassification::ComputeBound => COLOR_COMPUTE,
-        WorkloadClassification::MemoryBound => COLOR_MEMORY, // Now Amber
-        WorkloadClassification::ContentionBound => COLOR_CONTENTION, // Now Crimson
+        WorkloadClassification::MemoryBound => COLOR_MEMORY,
+        WorkloadClassification::ContentionBound => COLOR_CONTENTION,
     };
 
     let (pid_label, ipc_label) = if usage > 0.5 {
-        let p_str = match pid {
-            Some(p) => format!("PID:{}", p),
-            None => "IDLE".to_string(),
-        };
-        (p_str, format!("IPC:{:.2}", ipc))
+        (
+            match pid {
+                Some(p) => format!("PID:{}", p),
+                None => "IDLE".into(),
+            },
+            format!("IPC:{:.2}", ipc),
+        )
     } else {
-        ("IDLE".to_string(), "        ".to_string()) // Hide technicals when idle
+        ("IDLE".into(), "        ".into())
     };
 
     let block = Block::default()
@@ -222,10 +277,12 @@ fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     let width = area.width.saturating_sub(15) as usize;
     let filled = ((usage / 100.0) * width as f64) as usize;
     let bar = format!(
-        "{:>5.1}% [{}{}]",
+        "{:>5.1}% [{}{}] L1:{} L2:{}",
         usage,
         "█".repeat(filled),
-        " ".repeat(width.saturating_sub(filled))
+        " ".repeat(width.saturating_sub(filled)),
+        l1_size,
+        l2_size
     );
 
     f.render_widget(
@@ -236,11 +293,66 @@ fn draw_core(f: &mut Frame, area: Rect, cpu_id: u32, app: &App) {
     );
 }
 
+fn draw_help_popup(f: &mut Frame) {
+    let area = centered_rect(80, 75, f.size());
+    let block = Block::default()
+        .title(" swift-topomap | Technical Reference ")
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(Color::Cyan))
+        .padding(Padding::uniform(1));
+    f.render_widget(Clear, area);
+
+    let help_text = vec![
+        Line::from(vec![Span::styled(
+            "CORE CONTROLS",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  h / ?   - Toggle this reference screen"),
+        Line::from("  q / Esc - Exit utility"),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "OBSERVABILITY AT SPEED",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Use -i <ms> to adjust sampling resolution (e.g., -i 50 for high-perf)."),
+        Line::from(""),
+        Line::from(vec![Span::styled(
+            "THE 'EXPERT' SWITCH",
+            Style::default().add_modifier(Modifier::BOLD),
+        )]),
+        Line::from("  Use --sysfs to bypass eBPF and force the standard kernel engine."),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("Developed by ", Style::default().fg(SWIFTLOGIC_ORANGE)),
+            Span::styled("SwiftLogic Systems", Style::default().fg(SWIFTLOGIC_ORANGE)),
+        ]),
+    ];
+    f.render_widget(Paragraph::new(help_text).block(block), area);
+}
+
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}
+
 fn parse_cpu_list(list: &str) -> Vec<u32> {
     let mut cpus = Vec::new();
-    // Clean string of any spaces
-    let clean_list = list.replace(' ', "");
-    for part in clean_list.split(',') {
+    for part in list.replace(' ', "").split(',') {
         if part.contains('-') {
             let range: Vec<&str> = part.split('-').collect();
             if range.len() == 2 {
@@ -255,127 +367,4 @@ fn parse_cpu_list(list: &str) -> Vec<u32> {
         }
     }
     cpus
-}
-
-fn draw_help_overlay(f: &mut Frame) {
-    let area = centered_rect(80, 75, f.size());
-
-    // SwiftLogic Orange: R:255, G:135, B:0
-    let swiftlogic_orange = Color::Rgb(255, 135, 0);
-
-    let block = Block::default()
-        .title(" swift-topomap | Technical Reference ")
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(Color::Cyan))
-        .padding(Padding::uniform(1));
-
-    f.render_widget(ratatui::widgets::Clear, area);
-
-    let help_text = vec![
-        Line::from(vec![Span::styled(
-            "CORE CONTROLS",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::raw("  h / ?   "),
-            Span::styled(
-                "Toggle this reference screen",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::raw("  q / Esc "),
-            Span::styled("Exit utility", Style::default().fg(Color::DarkGray)),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "OBSERVABILITY AT SPEED",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::raw("  Use "),
-            Span::styled("-i <ms>", Style::default().fg(Color::Yellow)),
-            Span::raw(" to adjust the sampling resolution."),
-        ]),
-        Line::from(vec![
-            Span::styled("  • High-Perf: ", Style::default().fg(Color::Green)),
-            Span::raw("-i 50 for ultra-fast microarchitectural monitoring."),
-        ]),
-        Line::from(vec![
-            Span::styled("  • Remote:    ", Style::default().fg(Color::Blue)),
-            Span::raw("-i 1000 for stable monitoring over slow SSH links."),
-        ]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "THE 'EXPERT' SWITCH",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::raw("  Use "),
-            Span::styled("--sysfs", Style::default().fg(Color::Yellow)),
-            Span::raw(" to bypass the eBPF engine."),
-        ]),
-        Line::from(vec![Span::raw(
-            "  Forces the standard Sysfs engine for debugging and kernel-compatibility",
-        )]),
-        Line::from(vec![Span::raw(
-            "  verification, even when running with root privileges.",
-        )]),
-        Line::from(""),
-        Line::from(vec![Span::styled(
-            "MICROARCHITECTURAL CLASSIFICATION",
-            Style::default().add_modifier(Modifier::BOLD),
-        )]),
-        Line::from(vec![
-            Span::styled("  ■ Green: ", Style::default().fg(COLOR_COMPUTE)),
-            Span::raw("Healthy Compute (High IPC)"),
-        ]),
-        Line::from(vec![
-            Span::styled("  ■ Amber: ", Style::default().fg(COLOR_MEMORY)),
-            Span::raw("Memory/Cache Stalled (Low IPC/Stalled)"),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::raw("Developed by "),
-            Span::styled("SwiftLogic Systems", Style::default().fg(swiftlogic_orange)),
-        ]),
-        Line::from(vec![Span::styled(
-            "www.swiftlogic.systems",
-            Style::default().fg(Color::DarkGray),
-        )]),
-    ];
-
-    f.render_widget(
-        Paragraph::new(help_text)
-            .block(block)
-            .alignment(Alignment::Left),
-        area,
-    );
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(
-            [
-                Constraint::Percentage((100 - percent_y) / 2),
-                Constraint::Percentage(percent_y),
-                Constraint::Percentage((100 - percent_y) / 2),
-            ]
-            .as_ref(),
-        )
-        .split(r);
-
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints(
-            [
-                Constraint::Percentage((100 - percent_x) / 2),
-                Constraint::Percentage(percent_x),
-                Constraint::Percentage((100 - percent_x) / 2),
-            ]
-            .as_ref(),
-        )
-        .split(popup_layout[1])[1]
 }
